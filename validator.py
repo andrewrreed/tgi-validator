@@ -260,8 +260,8 @@ def try_run_model_with_shards(model_id: str, max_total_tokens: int, initial_shar
 
 def main():
     parser = argparse.ArgumentParser(description='Run text-generation-inference container')
-    parser.add_argument('--model-id', type=str, required=True,
-                      help='The model ID to run')
+    parser.add_argument('--model-ids', type=str, nargs='+', required=True,
+                      help='List of model IDs to run')
     parser.add_argument('--token-values', type=int, nargs='+', default=[2048],
                       help='List of max token values to test (default: [2048])')
     parser.add_argument('--num-shards', type=int, default=1,
@@ -283,34 +283,36 @@ def main():
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
-    all_results = []
     overall_success = True
-    # Track minimum successful shards for each token size
-    min_shards_by_tokens = {}
 
-    # Sort token values to ensure we test from smallest to largest
-    token_values = sorted(args.token_values)
-    
-    for max_tokens in token_values:
-        logger.info(f"Testing with max_tokens = {max_tokens}")
-        success, test_results = try_run_model_with_shards(
-            args.model_id, 
-            max_tokens, 
-            args.num_shards,
-            min_shards_by_tokens,
-            args.gpu_type,
-            args.image_uri
-        )
-        all_results.append(test_results)
+    for model_id in args.model_ids:
+        logger.info(f"Running tests for model: {model_id}")
+        all_results = []
+        min_shards_by_tokens = {}
+
+        # Sort token values to ensure we test from smallest to largest
+        token_values = sorted(args.token_values)
         
-        if success:
-            # Store the successful shard count for future reference
-            min_shards_by_tokens[max_tokens] = test_results['num_shard']
-        else:
-            overall_success = False
+        for max_tokens in token_values:
+            logger.info(f"Testing with max_tokens = {max_tokens}")
+            success, test_results = try_run_model_with_shards(
+                model_id, 
+                max_tokens, 
+                args.num_shards,
+                min_shards_by_tokens,
+                args.gpu_type,
+                args.image_uri
+            )
+            all_results.append(test_results)
+            
+            if success:
+                # Store the successful shard count for future reference
+                min_shards_by_tokens[max_tokens] = test_results['num_shard']
+            else:
+                overall_success = False
 
-    # Save all results to a single file
-    save_test_results(args.model_id, args.gpu_type, all_results, args.image_uri)
+        # Save all results to a single file
+        save_test_results(model_id, args.gpu_type, all_results, args.image_uri)
     
     if overall_success:
         logger.info("All model configurations tested successfully!")
