@@ -71,7 +71,7 @@ def get_config_values(max_total_tokens: int) -> dict:
     }
 
 
-def create_docker_run_command(model_id: str, max_total_tokens: int, num_shards: int) -> str:
+def create_docker_run_command(model_id: str, max_total_tokens: int, num_shards: int, image_uri: str) -> str:
     """Create the docker run command with appropriate parameters."""
     max_input_tokens = max_total_tokens - 1
     max_batch_prefill_tokens = max_input_tokens + 50
@@ -84,20 +84,22 @@ def create_docker_run_command(model_id: str, max_total_tokens: int, num_shards: 
     -e MAX_BATCH_PREFILL_TOKENS={max_batch_prefill_tokens} \
     -p 8080:80 \
     -v $PWD/data:/data \
-    ghcr.io/huggingface/text-generation-inference:2.4.1 \
+    {image_uri} \
     --model-id {model_id}
     """
 
-def save_test_results(model_id: str, all_results: list):
+def save_test_results(model_id: str, gpu_type: str, all_results: list, image_uri: str):
     """Save all test results to a single JSON file."""
     results_dir = Path("test_results")
     results_dir.mkdir(exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    result_file = results_dir / f"model_test_{model_id.replace('/', '_')}_{timestamp}.json"
+    result_file = results_dir / f"model_test_{model_id.replace('/', '_')}_{gpu_type}_{timestamp}.json"
     
     result_data = {
         "model_id": model_id,
+        "gpu_type": gpu_type,
+        "image_uri": image_uri,
         "tests": all_results,
         "timestamp": timestamp
     }
@@ -107,10 +109,10 @@ def save_test_results(model_id: str, all_results: list):
     
     logger.info(f"All test results saved to {result_file}")
 
-def run_model_container(model_id: str, max_total_tokens: int, num_shards: int) -> tuple[bool, dict]:
+def run_model_container(model_id: str, max_total_tokens: int, num_shards: int, image_uri: str) -> tuple[bool, dict]:
     """Modified to return both success status and test configuration"""
     config = get_config_values(max_total_tokens)
-    cmd = create_docker_run_command(model_id, max_total_tokens, num_shards)
+    cmd = create_docker_run_command(model_id, max_total_tokens, num_shards, image_uri)
     logger.info(f"Starting container with command:\n{cmd}")
     
     process: Optional[subprocess.Popen] = None
@@ -204,7 +206,7 @@ def run_model_container(model_id: str, max_total_tokens: int, num_shards: int) -
             except Exception as e:
                 logger.error(f"Unexpected error during cleanup: {str(e)}")
 
-def try_run_model_with_shards(model_id: str, max_total_tokens: int, initial_shards: int, min_shards_by_tokens: dict, gpu_type: str) -> tuple[bool, dict]:
+def try_run_model_with_shards(model_id: str, max_total_tokens: int, initial_shards: int, min_shards_by_tokens: dict, gpu_type: str, image_uri: str) -> tuple[bool, dict]:
     """Try running model with different shard counts, checking VRAM requirements first."""
     shard_options = [1, 2, 4, 8]
     model_vram = get_model_overhead(model_id)
@@ -249,7 +251,7 @@ def try_run_model_with_shards(model_id: str, max_total_tokens: int, initial_shar
             continue
             
         logger.info(f"Attempting to start model with {num_shards} shard(s)...")
-        success, test_results = run_model_container(model_id, max_total_tokens, num_shards)
+        success, test_results = run_model_container(model_id, max_total_tokens, num_shards, image_uri)
         if success:
             return True, test_results
         logger.warning(f"Failed with {num_shards} shard(s), trying next shard count...")
@@ -268,6 +270,9 @@ def main():
                       help='GPU type (e.g., nvidia-t4, nvidia-a100)')
     parser.add_argument('--debug', action='store_true',
                       help='Enable debug logging')
+    parser.add_argument('--image-uri', type=str, 
+                      default='ghcr.io/huggingface/text-generation-inference:2.4.1',
+                      help='Docker image URI for text-generation-inference (default: ghcr.io/huggingface/text-generation-inference:2.4.1)')
 
     args = parser.parse_args()
     
@@ -293,7 +298,8 @@ def main():
             max_tokens, 
             args.num_shards,
             min_shards_by_tokens,
-            args.gpu_type
+            args.gpu_type,
+            args.image_uri
         )
         all_results.append(test_results)
         
@@ -304,7 +310,7 @@ def main():
             overall_success = False
 
     # Save all results to a single file
-    save_test_results(args.model_id, all_results)
+    save_test_results(args.model_id, args.gpu_type, all_results, args.image_uri)
     
     if overall_success:
         logger.info("All model configurations tested successfully!")
