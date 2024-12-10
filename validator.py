@@ -156,6 +156,8 @@ def run_model_container(model_id: str, max_total_tokens: int, num_shards: int, i
             "max_batch_prefill_tokens": config["max_batch_prefill_tokens"],
             "num_shard": num_shards,
             "success": success,
+            "skipped": False,
+            "error": None,
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
         }
         return success, save_test_results_data
@@ -166,6 +168,8 @@ def run_model_container(model_id: str, max_total_tokens: int, num_shards: int, i
             **config,
             "num_shard": num_shards,
             "success": False,
+            "skipped": False,
+            "error": str(e),
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
         }
         return False, save_test_results_data
@@ -219,6 +223,21 @@ def try_run_model_with_shards(model_id: str, max_total_tokens: int, initial_shar
     min_shards_for_vram = max(1, int(model_vram / gpu_vram))
     logger.info(f"Model requires minimum {min_shards_for_vram} shard(s) based on VRAM requirements (model size {model_vram}GB / GPU VRAM {gpu_vram}GB)")
     
+    # If even maximum shards isn't enough, return formatted error
+    if min_shards_for_vram > max(shard_options):
+        logger.error(f"Model requires {min_shards_for_vram} shards, but maximum available is {max(shard_options)}")
+        config = get_config_values(max_total_tokens)
+        return False, {
+            "max_input_tokens": config["max_input_tokens"],
+            "max_total_tokens": config["max_total_tokens"],
+            "max_batch_prefill_tokens": config["max_batch_prefill_tokens"],
+            "num_shard": max(shard_options),
+            "success": False,
+            "skipped": False,
+            "error": "Insufficient GPU memory",
+            "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
+        }
+
     # Determine minimum shards based on previous results
     min_required_shards = 1
     for tokens, shards in min_shards_by_tokens.items():
@@ -310,6 +329,28 @@ def main():
                 min_shards_by_tokens[max_tokens] = test_results['num_shard']
             else:
                 overall_success = False
+                # Check if we failed with maximum shards
+                if test_results.get('num_shard', 0) == 8 or test_results.get('error') == 'Insufficient GPU memory':
+                    remaining_tokens = token_values[token_values.index(max_tokens) + 1:]
+                    if remaining_tokens:
+                        logger.warning(
+                            f"Failed with maximum shards ({test_results.get('num_shard', 8)}) for {max_tokens} tokens. "
+                            f"Skipping remaining token values {remaining_tokens} as they would also fail."
+                        )
+                        # Add failure entries for remaining token values
+                        for skip_tokens in remaining_tokens:
+                            skip_results = {
+                                "max_input_tokens": skip_tokens - 1,
+                                "max_total_tokens": skip_tokens,
+                                "max_batch_prefill_tokens": skip_tokens - 1 + 50,
+                                "num_shard": test_results.get('num_shard', 8),
+                                "success": False,
+                                "skipped": True,
+                                "error": "Skipped due to previous failure with maximum shards",
+                                "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
+                            }
+                            all_results.append(skip_results)
+                        break  # Exit the token values loop
 
         # Save all results to a single file
         save_test_results(model_id, args.gpu_type, all_results, args.image_uri)
