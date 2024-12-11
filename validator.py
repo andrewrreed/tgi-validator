@@ -142,11 +142,11 @@ def run_model_container(
         # Monitor the output
         success = False
         start_time = time.time()
-        timeout = 60 * 60  # 1 hour timeout
+        timeout = 60 * 90  # 1.5 hour timeout
 
         while True:
             if time.time() - start_time > timeout:
-                raise TimeoutError("Container startup timed out after 1 hour")
+                raise TimeoutError("Container startup timed out after 1.5 hours")
 
             output = process.stdout.readline()
             if output:
